@@ -2,13 +2,16 @@
 main.py — Ponto de entrada CLI para o simulador de busca P2P.
 
 Uso:
-    python main.py --config config.yaml [--verbose] [--grafico]
+    python main.py --config config.yaml [--verbose] [--grafico] [--sem-wizard]
 
-Depois, prompt interativo:
+Prompt interativo:
     > buscar --no n1 --recurso r5 --ttl 5 --algo flooding
-    > buscar --no n3 --recurso r2 --ttl 4 --algo informed_random_walk
-    > rede          (exibe resumo da rede)
-    > grafico       (exibe representação ASCII)
+    > buscar --no n3 --recurso r2 --ttl 4 --algo random_walk --modo backtracking
+    > buscar --no n1 --recurso r5 --ttl 6 --algo flooding --modo paralelo --num-caminhos 3
+    > buscar --no n1 --recurso r5 --ttl 5 --algo flooding --validar --exportar-rastro saida.txt
+    > consultar --recurso r5
+    > rede
+    > grafico
     > sair
 """
 
@@ -16,7 +19,6 @@ import argparse
 import shlex
 import sys
 
-# Força UTF-8 no console do Windows para exibir acentos corretamente
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -25,15 +27,14 @@ if sys.platform == "win32":
         pass
 
 from network import Network
-from search import executar_busca, ALGORITMOS
+from search import executar_busca, validar_com_vizinhos, ALGORITMOS, MODOS
 
 
 # ------------------------------------------------------------------
-# Representação ASCII da rede
+# Topologia ASCII
 # ------------------------------------------------------------------
 
 def exibir_grafico_ascii(rede: Network) -> None:
-    """Exibe uma representação textual simples da rede."""
     print("\n=== TOPOLOGIA DA REDE ===")
     arestas_vistas: set[frozenset] = set()
     for no in rede.nos.values():
@@ -51,7 +52,6 @@ def exibir_grafico_ascii(rede: Network) -> None:
 
 
 def exibir_grafico_matplotlib(rede: Network) -> None:
-    """Exibe a rede graficamente usando matplotlib (opcional)."""
     try:
         import matplotlib.pyplot as plt
         import networkx as nx
@@ -76,35 +76,242 @@ def exibir_grafico_matplotlib(rede: Network) -> None:
 
 
 # ------------------------------------------------------------------
+# Wizard de configuração inicial
+# ------------------------------------------------------------------
+
+def configurar_busca_inicial(rede: Network) -> dict:
+    """
+    Wizard interativo que define padrões para o comando buscar.
+    O usuário pode pressionar Enter para aceitar os valores padrão.
+    Retorna um dicionário com as configurações escolhidas.
+    """
+    print("=== CONFIGURAÇÃO INICIAL DA BUSCA ===")
+    print("Pressione Enter para manter o valor padrão indicado entre colchetes.\n")
+
+    # Recursos existentes na rede
+    todos_recursos: set[str] = set()
+    for no in rede.nos.values():
+        todos_recursos.update(no.recursos)
+    todos_nos = sorted(rede.nos.keys())
+    print(f"Nós disponíveis      : {todos_nos}")
+    print(f"Recursos na rede     : {sorted(todos_recursos)}")
+    print(f"Algoritmos           : {', '.join(ALGORITMOS.keys())}")
+    print(f"Modos de busca       : {', '.join(MODOS)}")
+    print()
+
+    recurso = input("Recurso-alvo padrão [nenhum]: ").strip() or None
+    if recurso and recurso not in todos_recursos:
+        print(f"  [aviso] '{recurso}' não existe em nenhum nó, mas será usado como padrão.")
+
+    no_default = input("Nó de origem padrão [nenhum]: ").strip() or None
+    if no_default and no_default not in rede.nos:
+        print(f"  [aviso] '{no_default}' não existe na rede, ignorando.")
+        no_default = None
+
+    algo_input = input("Algoritmo padrão [flooding]: ").strip()
+    algo = algo_input if algo_input in ALGORITMOS else "flooding"
+
+    ttl_input = input("TTL padrão [5]: ").strip()
+    try:
+        ttl = int(ttl_input) if ttl_input else 5
+    except ValueError:
+        ttl = 5
+
+    modo_input = input("Modo padrão (normal/backtracking/paralelo/ambos) [normal]: ").strip()
+    modo = modo_input if modo_input in MODOS else "normal"
+
+    nc_input = input("Número de caminhos paralelos [3]: ").strip()
+    try:
+        num_caminhos = int(nc_input) if nc_input else 3
+    except ValueError:
+        num_caminhos = 3
+
+    defaults = {
+        "recurso": recurso,
+        "no_id": no_default,
+        "algo": algo,
+        "ttl": ttl,
+        "modo": modo,
+        "num_caminhos": num_caminhos,
+    }
+
+    print("\nConfigurações padrão definidas:")
+    print(f"  Recurso        : {recurso or '(nenhum)'}")
+    print(f"  Nó de origem   : {no_default or '(nenhum)'}")
+    print(f"  Algoritmo      : {algo}")
+    print(f"  TTL            : {ttl}")
+    print(f"  Modo           : {modo}")
+    print(f"  Num. caminhos  : {num_caminhos}")
+    print()
+
+    return defaults
+
+
+# ------------------------------------------------------------------
+# Rastro da busca
+# ------------------------------------------------------------------
+
+def _exibir_rastro(resultado, recurso_id: str, algo: str) -> None:
+    print("\n=== RASTRO DA BUSCA ===")
+    print(f"Recurso: {recurso_id}  |  Algoritmo: {algo}")
+    print(f"Nós visitados ({len(resultado.caminho)}): {' -> '.join(resultado.caminho) or '(vazio)'}")
+
+    if resultado.mensagens_log:
+        print(f"\nMensagens trocadas ({len(resultado.mensagens_log)}):")
+        for i, (de, para, conteudo) in enumerate(resultado.mensagens_log, 1):
+            print(f"  [{i:3d}] {de:>8} -> {para:<8}  {conteudo}")
+
+    if resultado.encontrado:
+        print(f"\nRecurso encontrado em: '{resultado.no_encontrado}'")
+    else:
+        print("\nRecurso NÃO encontrado.")
+    print("=======================\n")
+
+
+def _exportar_rastro(resultado, recurso_id: str, algo: str, arquivo: str) -> None:
+    try:
+        with open(arquivo, "w", encoding="utf-8") as f:
+            f.write("RASTRO DA BUSCA\n")
+            f.write("=" * 40 + "\n")
+            f.write(f"Recurso   : {recurso_id}\n")
+            f.write(f"Algoritmo : {algo}\n")
+            f.write(f"Encontrado: {'Sim' if resultado.encontrado else 'Nao'}\n")
+            if resultado.encontrado:
+                f.write(f"No com recurso: {resultado.no_encontrado}\n")
+            f.write(f"Mensagens : {resultado.mensagens}\n")
+            f.write(f"Nos envolvidos: {sorted(resultado.nos_envolvidos)}\n\n")
+
+            f.write(f"SEQUENCIA DE NOS ({len(resultado.caminho)}):\n")
+            f.write(" -> ".join(resultado.caminho) + "\n\n")
+
+            if resultado.mensagens_log:
+                f.write(f"MENSAGENS TROCADAS ({len(resultado.mensagens_log)}):\n")
+                for i, (de, para, conteudo) in enumerate(resultado.mensagens_log, 1):
+                    f.write(f"  [{i}] {de} -> {para}: {conteudo}\n")
+
+        print(f"Rastro exportado para '{arquivo}'.")
+    except OSError as e:
+        print(f"Erro ao exportar rastro: {e}")
+
+
+# ------------------------------------------------------------------
+# Validação com vizinhos
+# ------------------------------------------------------------------
+
+def _exibir_validacao(resultado, rede: Network, recurso_id: str, verbose: bool) -> None:
+    if not resultado.encontrado or not resultado.no_encontrado:
+        print("  (validação ignorada: recurso não encontrado)")
+        return
+
+    no_enc = rede.nos.get(resultado.no_encontrado)
+    if not no_enc:
+        print(f"  (validação ignorada: nó '{resultado.no_encontrado}' não localizado)")
+        return
+
+    print(f"\n--- Validação com vizinhos de '{no_enc.id}' ---")
+    val = validar_com_vizinhos(no_enc, recurso_id)
+
+    for viz_id, resp in val["respostas"].items():
+        print(f"  {viz_id}: {resp}")
+
+    if val["total_vizinhos"] == 0:
+        print("  (nenhum vizinho para consultar)")
+    else:
+        print(
+            f"  Resultado: {val['confirmacoes']} CONFIRMA / {val['refutacoes']} REFUTA"
+            f"  -> {'VALIDO' if val['valido'] else 'INVALIDO'}"
+        )
+    print()
+
+
+# ------------------------------------------------------------------
+# Consulta de recursos no grafo
+# ------------------------------------------------------------------
+
+def processar_consultar(rede: Network, args_linha: list[str]) -> None:
+    parser = argparse.ArgumentParser(prog="consultar", add_help=False)
+    parser.add_argument("--recurso", required=True, dest="recurso_id")
+
+    try:
+        args = parser.parse_args(args_linha)
+    except SystemExit:
+        print("Uso: consultar --recurso <id>")
+        return
+
+    nos_com = [no for no in rede.nos.values() if no.tem_recurso(args.recurso_id)]
+
+    print(f"\nConsulta de recursos no grafo: '{args.recurso_id}'")
+    if nos_com:
+        print(f"  Recurso presente em {len(nos_com)} nó(s):")
+        for no in nos_com:
+            vizinhos_ids = [v.id for v in no.vizinhos]
+            print(f"    {no.id}  (vizinhos: {vizinhos_ids})")
+    else:
+        print(f"  '{args.recurso_id}' não existe em nenhum nó da rede.")
+    print()
+
+
+# ------------------------------------------------------------------
 # Ajuda
 # ------------------------------------------------------------------
 
 def _exibir_ajuda() -> None:
     print("Comandos disponíveis:")
-    print("  buscar --no <id> --recurso <id> --ttl <n> --algo <algoritmo> [--verbose]")
-    print("    algoritmos: flooding | informed_flooding | random_walk | informed_random_walk")
-    print("  rede         — exibe topologia ASCII e recursos de cada nó")
-    print("  grafico      — exibe grafo com matplotlib")
-    print("  ajuda        — exibe esta mensagem")
-    print("  sair         — encerra o programa")
+    print()
+    print("  buscar --no <id> --recurso <id> --ttl <n> --algo <algoritmo>")
+    print("         [--modo normal|backtracking|paralelo|ambos]")
+    print("         [--num-caminhos <n>]  (usado com paralelo/ambos, padrão 3)")
+    print("         [--validar]           (consulta vizinhos após encontrar)")
+    print("         [--rastro]            (exibe rastro detalhado)")
+    print("         [--exportar-rastro <arquivo>]")
+    print("         [--verbose]")
+    print()
+    print("    algoritmos: flooding | informed_flooding | random_walk |")
+    print("                informed_random_walk | backtracking_walk | parallel_walk")
+    print()
+    print("  consultar --recurso <id>  — mostra quais nós têm o recurso no grafo")
+    print("  rede                      — topologia ASCII e recursos por nó")
+    print("  grafico                   — visualização matplotlib")
+    print("  ajuda                     — esta mensagem")
+    print("  sair                      — encerra o programa")
 
 
 # ------------------------------------------------------------------
-# Processamento de comandos interativos
+# Processamento do comando buscar
 # ------------------------------------------------------------------
 
-def processar_buscar(rede: Network, args_linha: list[str], verbose: bool) -> None:
+def processar_buscar(
+    rede: Network,
+    args_linha: list[str],
+    verbose_global: bool,
+    defaults: dict,
+) -> None:
     parser = argparse.ArgumentParser(prog="buscar", add_help=False)
-    parser.add_argument("--no", required=True, dest="no_id")
-    parser.add_argument("--recurso", required=True, dest="recurso_id")
-    parser.add_argument("--ttl", required=True, type=int)
-    parser.add_argument("--algo", required=True, choices=list(ALGORITMOS.keys()))
+    parser.add_argument("--no", dest="no_id", default=defaults.get("no_id"))
+    parser.add_argument("--recurso", dest="recurso_id", default=defaults.get("recurso"))
+    parser.add_argument("--ttl", type=int, default=defaults.get("ttl", 5))
+    parser.add_argument("--algo", choices=list(ALGORITMOS.keys()),
+                        default=defaults.get("algo", "flooding"))
+    parser.add_argument("--modo", choices=list(MODOS),
+                        default=defaults.get("modo", "normal"))
+    parser.add_argument("--num-caminhos", type=int, dest="num_caminhos",
+                        default=defaults.get("num_caminhos", 3))
+    parser.add_argument("--validar", action="store_true", default=False)
+    parser.add_argument("--rastro", action="store_true", default=False)
+    parser.add_argument("--exportar-rastro", dest="exportar_rastro", default=None)
     parser.add_argument("--verbose", action="store_true", default=False)
 
     try:
         args = parser.parse_args(args_linha)
     except SystemExit:
-        print("Uso: buscar --no <id> --recurso <id> --ttl <n> --algo <algoritmo>")
+        print("Uso: buscar --no <id> --recurso <id> [--ttl <n>] [--algo <algoritmo>] ...")
+        return
+
+    if not args.no_id:
+        print("Erro: informe o nó de origem com --no <id>.")
+        return
+    if not args.recurso_id:
+        print("Erro: informe o recurso com --recurso <id>.")
         return
 
     try:
@@ -113,10 +320,12 @@ def processar_buscar(rede: Network, args_linha: list[str], verbose: bool) -> Non
         print(f"Erro: {e}")
         return
 
-    modo_verbose = verbose or args.verbose
+    modo_verbose = verbose_global or args.verbose
 
-    print(f"\nBuscando '{args.recurso_id}' a partir de '{args.no_id}' "
-          f"(TTL={args.ttl}, algoritmo={args.algo})...")
+    print(
+        f"\nBuscando '{args.recurso_id}' a partir de '{args.no_id}' "
+        f"(TTL={args.ttl}, algo={args.algo}, modo={args.modo})..."
+    )
 
     resultado = executar_busca(
         no_origem=no_origem,
@@ -124,6 +333,8 @@ def processar_buscar(rede: Network, args_linha: list[str], verbose: bool) -> Non
         ttl=args.ttl,
         algo=args.algo,
         verbose=modo_verbose,
+        modo=args.modo,
+        num_caminhos=args.num_caminhos,
     )
 
     if modo_verbose and resultado.log:
@@ -133,14 +344,23 @@ def processar_buscar(rede: Network, args_linha: list[str], verbose: bool) -> Non
         print("--- Fim do log ---")
 
     print("\n=== RESULTADO ===")
-    print(f"  Algoritmo      : {args.algo}")
+    print(f"  Algoritmo      : {args.algo}  (modo: {args.modo})")
     print(f"  Mensagens      : {resultado.mensagens}")
     print(f"  Nós envolvidos : {len(resultado.nos_envolvidos)} {sorted(resultado.nos_envolvidos)}")
     if resultado.encontrado:
         print(f"  Recurso        : ENCONTRADO em '{resultado.no_encontrado}'")
     else:
-        print(f"  Recurso        : NÃO ENCONTRADO (TTL esgotado)")
+        print(f"  Recurso        : NAO ENCONTRADO (TTL esgotado)")
     print()
+
+    if args.validar:
+        _exibir_validacao(resultado, rede, args.recurso_id, modo_verbose)
+
+    if args.rastro:
+        _exibir_rastro(resultado, args.recurso_id, args.algo)
+
+    if args.exportar_rastro:
+        _exportar_rastro(resultado, args.recurso_id, args.algo, args.exportar_rastro)
 
 
 # ------------------------------------------------------------------
@@ -151,7 +371,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Simulador de busca em redes P2P")
     parser.add_argument("--config", required=True, help="Caminho para o arquivo config.yaml")
     parser.add_argument("--verbose", action="store_true", help="Ativa log passo a passo")
-    parser.add_argument("--grafico", action="store_true", help="Exibe grafo com matplotlib ao iniciar")
+    parser.add_argument("--grafico", action="store_true", help="Exibe grafo matplotlib ao iniciar")
+    parser.add_argument("--sem-wizard", action="store_true",
+                        help="Pula o wizard de configuração inicial")
     args = parser.parse_args()
 
     print(f"Carregando rede de '{args.config}'...")
@@ -161,12 +383,28 @@ def main() -> None:
         print(f"Erro ao carregar rede: {e}")
         sys.exit(1)
 
-    print(f"Rede carregada com sucesso: {len(rede.nos)} nós.\n")
+    print(f"Rede carregada: {len(rede.nos)} nós.\n")
     print(rede.resumo())
     print()
 
     if args.grafico:
         exibir_grafico_matplotlib(rede)
+
+    # Wizard de configuração inicial
+    defaults: dict = {
+        "recurso": None,
+        "no_id": None,
+        "algo": "flooding",
+        "ttl": 5,
+        "modo": "normal",
+        "num_caminhos": 3,
+    }
+
+    if not args.sem_wizard:
+        resp = input("Deseja configurar padrões de busca agora? (s/N): ").strip().lower()
+        if resp == "s":
+            defaults = configurar_busca_inicial(rede)
+        print()
 
     _exibir_ajuda()
     print()
@@ -198,7 +436,9 @@ def main() -> None:
         elif comando == "grafico":
             exibir_grafico_matplotlib(rede)
         elif comando == "buscar":
-            processar_buscar(rede, partes[1:], args.verbose)
+            processar_buscar(rede, partes[1:], args.verbose, defaults)
+        elif comando == "consultar":
+            processar_consultar(rede, partes[1:])
         elif comando in ("ajuda", "help"):
             _exibir_ajuda()
         else:
