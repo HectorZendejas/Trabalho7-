@@ -85,45 +85,99 @@ def configurar_busca_inicial(rede: Network) -> dict:
     O usuário pode pressionar Enter para aceitar os valores padrão.
     Retorna um dicionário com as configurações escolhidas.
     """
-    print("=== CONFIGURAÇÃO INICIAL DA BUSCA ===")
-    print("Pressione Enter para manter o valor padrão indicado entre colchetes.\n")
-
-    # Recursos existentes na rede
     todos_recursos: set[str] = set()
     for no in rede.nos.values():
         todos_recursos.update(no.recursos)
     todos_nos = sorted(rede.nos.keys())
-    print(f"Nós disponíveis      : {todos_nos}")
-    print(f"Recursos na rede     : {sorted(todos_recursos)}")
-    print(f"Algoritmos           : {', '.join(ALGORITMOS.keys())}")
-    print(f"Modos de busca       : {', '.join(MODOS)}")
+    recursos_ord = sorted(todos_recursos)
+
+    print("=== CONFIGURAÇÃO DE PADRÕES ===")
+    print("Defina valores padrão para não precisar redigitá-los a cada busca.")
+    print("Pressione Enter para manter o padrão entre colchetes.\n")
+    print(f"  Nós disponíveis : {todos_nos}")
+    print(f"  Recursos na rede: {recursos_ord}")
+    print(f"  Algoritmos      : {', '.join(ALGORITMOS.keys())}")
+    print(f"  Modos           : {', '.join(MODOS)}")
     print()
 
-    recurso = input("Recurso-alvo padrão [nenhum]: ").strip() or None
-    if recurso and recurso not in todos_recursos:
-        print(f"  [aviso] '{recurso}' não existe em nenhum nó, mas será usado como padrão.")
+    # --- recurso ---
+    print("1) Recurso-alvo padrão")
+    print(f"   Digite apenas o ID do recurso, ex: {recursos_ord[0] if recursos_ord else 'r1'}")
+    recurso_raw = input("   Valor [nenhum]: ").strip() or None
+    recurso = None
+    if recurso_raw:
+        if recurso_raw in todos_recursos:
+            recurso = recurso_raw
+        else:
+            opcoes = [r for r in recursos_ord if recurso_raw in r]
+            if opcoes:
+                print(f"   [aviso] '{recurso_raw}' não encontrado. Recursos parecidos: {opcoes}")
+            else:
+                print(f"   [aviso] '{recurso_raw}' não existe na rede. Deixando sem padrão.")
+    print()
 
-    no_default = input("Nó de origem padrão [nenhum]: ").strip() or None
-    if no_default and no_default not in rede.nos:
-        print(f"  [aviso] '{no_default}' não existe na rede, ignorando.")
-        no_default = None
+    # --- nó de origem ---
+    print("2) Nó de origem padrão")
+    print(f"   Digite apenas o ID do nó, ex: {todos_nos[0] if todos_nos else 'n1'}")
+    no_raw = input("   Valor [nenhum]: ").strip() or None
+    no_default = None
+    if no_raw:
+        if no_raw in rede.nos:
+            no_default = no_raw
+        else:
+            opcoes = [n for n in todos_nos if no_raw in n]
+            if opcoes:
+                print(f"   [aviso] '{no_raw}' não encontrado. Nós parecidos: {opcoes}")
+            else:
+                print(f"   [aviso] '{no_raw}' não existe na rede. Deixando sem padrão.")
+    print()
 
-    algo_input = input("Algoritmo padrão [flooding]: ").strip()
+    # --- algoritmo ---
+    algos = list(ALGORITMOS.keys())
+    print("3) Algoritmo padrão")
+    print(f"   Opções: {', '.join(algos)}")
+    algo_input = input("   Valor [flooding]: ").strip()
+    if algo_input and algo_input not in ALGORITMOS:
+        parecidos = [a for a in algos if algo_input in a]
+        if parecidos:
+            print(f"   [aviso] '{algo_input}' não reconhecido. Você quis dizer: {parecidos[0]}? Usando flooding.")
+        else:
+            print(f"   [aviso] '{algo_input}' não reconhecido. Usando flooding.")
     algo = algo_input if algo_input in ALGORITMOS else "flooding"
+    print()
 
-    ttl_input = input("TTL padrão [5]: ").strip()
+    # --- TTL ---
+    print("4) TTL padrão (número inteiro, ex: 5)")
+    ttl_input = input("   Valor [5]: ").strip()
     try:
         ttl = int(ttl_input) if ttl_input else 5
+        if ttl <= 0:
+            print("   [aviso] TTL deve ser positivo. Usando 5.")
+            ttl = 5
     except ValueError:
+        print(f"   [aviso] '{ttl_input}' não é um número. Usando 5.")
         ttl = 5
+    print()
 
-    modo_input = input("Modo padrão (normal/backtracking/paralelo/ambos) [normal]: ").strip()
+    # --- modo ---
+    print("5) Modo de busca padrão")
+    print(f"   Opções: {', '.join(MODOS)}")
+    modo_input = input("   Valor [normal]: ").strip()
+    if modo_input and modo_input not in MODOS:
+        print(f"   [aviso] '{modo_input}' não reconhecido. Usando normal.")
     modo = modo_input if modo_input in MODOS else "normal"
+    print()
 
-    nc_input = input("Número de caminhos paralelos [3]: ").strip()
+    # --- num caminhos ---
+    print("6) Número de caminhos paralelos (usado somente no modo paralelo/ambos)")
+    nc_input = input("   Valor [3]: ").strip()
     try:
         num_caminhos = int(nc_input) if nc_input else 3
+        if num_caminhos <= 0:
+            print("   [aviso] Deve ser positivo. Usando 3.")
+            num_caminhos = 3
     except ValueError:
+        print(f"   [aviso] '{nc_input}' não é um número. Usando 3.")
         num_caminhos = 3
 
     defaults = {
@@ -135,13 +189,19 @@ def configurar_busca_inicial(rede: Network) -> dict:
         "num_caminhos": num_caminhos,
     }
 
-    print("\nConfigurações padrão definidas:")
+    print("\n=== Padrões salvos ===")
     print(f"  Recurso        : {recurso or '(nenhum)'}")
     print(f"  Nó de origem   : {no_default or '(nenhum)'}")
     print(f"  Algoritmo      : {algo}")
     print(f"  TTL            : {ttl}")
     print(f"  Modo           : {modo}")
     print(f"  Num. caminhos  : {num_caminhos}")
+    print()
+    print("Esses valores serão usados quando você omitir o parâmetro no comando buscar.")
+    print("Exemplo com todos os padrões acima:")
+    exemplo_no = no_default or (todos_nos[0] if todos_nos else "n1")
+    exemplo_rec = recurso or (recursos_ord[0] if recursos_ord else "r1")
+    print(f"  > buscar --no {exemplo_no} --recurso {exemplo_rec}")
     print()
 
     return defaults
