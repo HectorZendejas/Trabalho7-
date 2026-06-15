@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simulador P2P</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet" />
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+  <style>
+    :root {
+      --col-default:  #3b82f6;
+      --col-origin:   #8b5cf6;
+      --col-visited:  #f59e0b;
+      --col-found:    #10b981;
+      --col-queried:  #f97316;
+      --col-border-d: #60a5fa;
+      --col-border-o: #a78bfa;
+      --col-border-v: #fcd34d;
+      --col-border-f: #34d399;
+      --col-border-q: #fb923c;
+    }
+
+    body { background: #0f172a; font-family: 'Inter', system-ui, sans-serif; }
+
+    /* ---- navbar ---- */
+    .navbar-brand span.badge { font-size: .65rem; vertical-align: middle; }
+
+    /* ---- graph card ---- */
+    #network-graph {
+      height: calc(100vh - 160px);
+      min-height: 400px;
+      border-radius: 0 0 .5rem .5rem;
+    }
+
+    /* ---- right panel ---- */
+    .right-panel {
+      height: calc(100vh - 100px);
+      overflow-y: auto;
+      scrollbar-width: thin;
+    }
+
+    /* ---- form ---- */
+    .form-label { font-size: .8rem; color: #94a3b8; margin-bottom: 2px; }
+    select.form-select, input.form-control { background: #1e293b; border-color: #334155; color: #e2e8f0; }
+    select.form-select:focus, input.form-control:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.25); }
+    .form-range { accent-color: #3b82f6; }
+    .form-check-input:checked { background-color: #3b82f6; border-color: #3b82f6; }
+
+    /* ---- btn buscar ---- */
+    #btn-buscar {
+      background: linear-gradient(135deg, #3b82f6, #6366f1);
+      border: none;
+      font-weight: 600;
+      letter-spacing: .04em;
+      transition: opacity .15s;
+    }
+    #btn-buscar:hover { opacity: .9; }
+    #btn-buscar:disabled { opacity: .5; }
+
+    /* ---- status badge ---- */
+    .status-found    { background: #064e3b; border: 1px solid #10b981; color: #34d399; border-radius: .5rem; }
+    .status-notfound { background: #450a0a; border: 1px solid #ef4444; color: #f87171; border-radius: .5rem; }
+
+    /* ---- stat chip ---- */
+    .stat-chip {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: .4rem;
+      padding: .3rem .6rem;
+      font-size: .8rem;
+      display: inline-flex;
+      align-items: center;
+      gap: .3rem;
+    }
+    .stat-chip .val { font-size: 1rem; font-weight: 700; color: #e2e8f0; }
+
+    /* ---- trace ---- */
+    .trace-list { max-height: 220px; overflow-y: auto; font-size: .78rem; font-family: monospace; }
+    .trace-row { display: flex; gap: .5rem; padding: 2px 0; border-bottom: 1px solid #1e293b; }
+    .trace-idx { color: #475569; min-width: 2.2rem; text-align: right; }
+    .trace-from { color: #60a5fa; min-width: 3.5rem; }
+    .trace-arr  { color: #475569; }
+    .trace-to   { color: #a78bfa; min-width: 3.5rem; }
+    .trace-msg  { color: #94a3b8; flex: 1; }
+    .trace-msg.found    { color: #34d399; font-weight: 600; }
+    .trace-msg.cache    { color: #fbbf24; }
+    .trace-msg.query    { color: #94a3b8; }
+
+    /* ---- path chips ---- */
+    .path-wrap { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+    .path-chip {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 1rem;
+      padding: 1px 8px;
+      font-size: .75rem;
+      color: #cbd5e1;
+    }
+    .path-chip.origin { border-color: #8b5cf6; color: #c4b5fd; }
+    .path-chip.found  { border-color: #10b981; color: #6ee7b7; }
+    .path-arr { color: #475569; font-size: .8rem; }
+
+    /* ---- validation ---- */
+    .val-row { display: flex; justify-content: space-between; align-items: center;
+               padding: 3px 0; border-bottom: 1px solid #1e293b; font-size: .82rem; }
+    .val-row:last-child { border-bottom: none; }
+    .badge-confirma { background: #064e3b; color: #34d399; border: 1px solid #10b981; border-radius: 4px; padding: 1px 7px; font-size: .72rem; }
+    .badge-refuta   { background: #450a0a; color: #f87171; border: 1px solid #ef4444; border-radius: 4px; padding: 1px 7px; font-size: .72rem; }
+
+    /* ---- legend ---- */
+    .legend { display: flex; gap: .8rem; flex-wrap: wrap; padding: 6px 10px; background: #0f172a; border-top: 1px solid #1e293b; border-radius: 0 0 .5rem .5rem; }
+    .legend-item { display: flex; align-items: center; gap: 4px; font-size: .72rem; color: #94a3b8; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    /* ---- loader ---- */
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .pulse { animation: pulse 1s infinite; }
+
+    /* ---- card headers ---- */
+    .card { background: #1e293b; border-color: #334155; }
+    .card-header { background: #162032; border-color: #334155; font-size: .85rem; font-weight: 600; }
+
+    /* ---- speed row ---- */
+    #speed-label { min-width: 3.5rem; text-align: right; font-size: .78rem; color: #94a3b8; }
+  </style>
+</head>
+<body>
+
+<!-- ================================================================ NAVBAR -->
+<nav class="navbar navbar-dark px-3 py-2" style="background:#0f172a; border-bottom:1px solid #1e293b;">
+  <span class="navbar-brand mb-0 h6">
+    <i class="bi bi-diagram-3-fill me-2" style="color:#3b82f6;"></i>
+    Simulador de Busca P2P
+    <span class="badge bg-secondary ms-2">vis.js</span>
+  </span>
+  <div class="d-flex align-items-center gap-3">
+    <span id="net-stats" class="text-muted" style="font-size:.78rem;"></span>
+    <div class="input-group input-group-sm" style="width:220px;">
+      <span class="input-group-text" style="background:#1e293b;border-color:#334155;">
+        <i class="bi bi-search" style="color:#60a5fa;"></i>
+      </span>
+      <select id="sel-consultar" class="form-select form-select-sm" style="background:#1e293b;border-color:#334155;color:#e2e8f0;">
+        <option value="">Destacar recurso no grafo…</option>
+        {% for r in recursos %}
+        <option value="{{ r }}">{{ r }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button class="btn btn-sm btn-outline-secondary" id="btn-reset" title="Limpar destaques">
+      <i class="bi bi-arrow-counterclockwise"></i>
+    </button>
+  </div>
+</nav>
+
+<!-- ================================================================ MAIN -->
+<div class="container-fluid py-2 px-3">
+  <div class="row g-3">
+
+    <!-- ============================================== LEFT — GRAPH -->
+    <div class="col-lg-7 col-xl-8">
+      <div class="card" style="border-radius:.5rem;">
+        <div class="card-header d-flex align-items-center gap-2 py-2">
+          <i class="bi bi-graph-up-arrow" style="color:#3b82f6;"></i>
+          Topologia da Rede
+          <span id="anim-badge" class="badge bg-warning text-dark ms-auto d-none pulse">
+            <i class="bi bi-play-fill"></i> animando…
+          </span>
+        </div>
+        <div id="network-graph"></div>
+        <div class="legend">
+          <div class="legend-item"><div class="legend-dot" style="background:var(--col-default);"></div> Padrão</div>
+          <div class="legend-item"><div class="legend-dot" style="background:var(--col-origin);"></div> Origem</div>
+          <div class="legend-item"><div class="legend-dot" style="background:var(--col-visited);"></div> Visitado</div>
+          <div class="legend-item"><div class="legend-dot" style="background:var(--col-found);"></div> Encontrado</div>
+          <div class="legend-item"><div class="legend-dot" style="background:var(--col-queried);"></div> Destacado</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================== RIGHT — CONTROLS -->
+    <div class="col-lg-5 col-xl-4">
+      <div class="right-panel d-flex flex-column gap-3">
+
+        <!-- ---- BUSCAR CARD ---- -->
+        <div class="card">
+          <div class="card-header">
+            <i class="bi bi-search me-1" style="color:#3b82f6;"></i> Configurar Busca
+          </div>
+          <div class="card-body pb-2">
+
+            <div class="row g-2 mb-2">
+              <div class="col-6">
+                <label class="form-label">Nó de origem</label>
+                <select id="sel-no" class="form-select form-select-sm">
+                  {% for n in nos %}
+                  <option value="{{ n }}">{{ n }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-6">
+                <label class="form-label">Recurso-alvo</label>
+                <select id="sel-recurso" class="form-select form-select-sm">
+                  {% for r in recursos %}
+                  <option value="{{ r }}">{{ r }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+
+            <div class="row g-2 mb-2">
+              <div class="col-6">
+                <label class="form-label">Algoritmo</label>
+                <select id="sel-algo" class="form-select form-select-sm">
+                  {% for a in algoritmos %}
+                  <option value="{{ a }}">{{ a }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col-6">
+                <label class="form-label">Modo</label>
+                <select id="sel-modo" class="form-select form-select-sm">
+                  {% for m in modos %}
+                  <option value="{{ m }}">{{ m }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label d-flex justify-content-between">
+                TTL <span id="ttl-val" class="text-info fw-bold">5</span>
+              </label>
+              <input type="range" class="form-range" id="inp-ttl" min="1" max="20" value="5" />
+            </div>
+
+            <div id="row-caminhos" class="mb-2" style="display:none;">
+              <label class="form-label d-flex justify-content-between">
+                Nº de caminhos paralelos
+                <span id="nc-val" class="text-info fw-bold">3</span>
+              </label>
+              <input type="range" class="form-range" id="inp-caminhos" min="1" max="8" value="3" />
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label d-flex justify-content-between">
+                Velocidade da animação
+                <span id="speed-label">300 ms</span>
+              </label>
+              <input type="range" class="form-range" id="inp-speed" min="50" max="1200" step="50" value="300" />
+            </div>
+
+            <div class="d-flex gap-3 mb-1">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="chk-validar" />
+                <label class="form-check-label" style="font-size:.82rem;" for="chk-validar">
+                  Validar com vizinhos
+                </label>
+              </div>
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="chk-animar" checked />
+                <label class="form-check-label" style="font-size:.82rem;" for="chk-animar">
+                  Animar rastro
+                </label>
+              </div>
+            </div>
+
+          </div>
+          <div class="card-footer pt-2 pb-3 d-flex gap-2">
+            <button id="btn-buscar" class="btn btn-primary flex-grow-1">
+              <i class="bi bi-play-circle-fill me-1"></i> Buscar
+            </button>
+            <button id="btn-replay" class="btn btn-outline-secondary d-none" title="Repetir animação">
+              <i class="bi bi-repeat"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- ---- RESULTADO CARD ---- -->
+        <div class="card d-none" id="result-card">
+          <div class="card-header d-flex align-items-center gap-2">
+            <i class="bi bi-bar-chart-fill me-1" style="color:#3b82f6;"></i>
+            Resultado
+          </div>
+          <div class="card-body">
+
+            <div id="status-box" class="p-2 mb-3 text-center fw-bold fs-6"></div>
+
+            <div class="d-flex flex-wrap gap-2 mb-3" id="stats-row"></div>
+
+            <div id="path-section" class="d-none">
+              <p class="form-label mb-1">Caminho percorrido</p>
+              <div class="path-wrap" id="path-wrap"></div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- ---- MENSAGENS CARD ---- -->
+        <div class="card d-none" id="trace-card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-chat-dots me-1" style="color:#3b82f6;"></i> Mensagens trocadas</span>
+            <span id="trace-count" class="badge bg-secondary"></span>
+          </div>
+          <div class="card-body p-2">
+            <div class="trace-list" id="trace-list"></div>
+          </div>
+        </div>
+
+        <!-- ---- VALIDAÇÃO CARD ---- -->
+        <div class="card d-none" id="val-card">
+          <div class="card-header">
+            <i class="bi bi-shield-check me-1" style="color:#3b82f6;"></i> Validação com vizinhos
+          </div>
+          <div class="card-body p-2" id="val-body"></div>
+        </div>
+
+      </div><!-- right-panel -->
+    </div>
+
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+/* ================================================================
+   ESTADO GLOBAL
+   ============================================================== */
+let network = null;
+let nodesDs = null;
+let edgesDs = null;
+let lastResult = null;
+let animSpeed = 300;
+
+const COLORS = {
+  default:  { bg: '#3b82f6', border: '#60a5fa' },
+  origin:   { bg: '#8b5cf6', border: '#a78bfa' },
+  visited:  { bg: '#f59e0b', border: '#fcd34d' },
+  found:    { bg: '#10b981', border: '#34d399' },
+  queried:  { bg: '#f97316', border: '#fb923c' },
+};
+
+/* ================================================================
+   INICIALIZAÇÃO DO GRAFO
+   ============================================================== */
+async function initGraph() {
+  const resp = await fetch('/api/rede');
+  const data = await resp.json();
+
+  nodesDs = new vis.DataSet(data.nos.map(n => ({
+    id: n.id,
+    label: n.id + '\n' + n.recursos.join(', '),
+    title: `<b>${n.id}</b><br>Recursos: ${n.recursos.join(', ')}`,
+    color: { background: COLORS.default.bg, border: COLORS.default.border,
+             highlight: { background: COLORS.default.bg, border: '#93c5fd' } },
+    font: { color: '#e2e8f0', size: 13, bold: { mod: 'bold' } },
+    shape: 'ellipse',
+    recursos: n.recursos,
+  })));
+
+  edgesDs = new vis.DataSet(data.arestas.map((e, i) => ({
+    id: i, from: e.from, to: e.to,
+    color: { color: '#334155', highlight: '#64748b' },
+    width: 2,
+  })));
+
+  const container = document.getElementById('network-graph');
+  network = new vis.Network(container, { nodes: nodesDs, edges: edgesDs }, {
+    physics: {
+      enabled: true,
+      stabilization: { iterations: 300 },
+      barnesHut: { gravitationalConstant: -4000, springLength: 130, damping: 0.12 },
+    },
+    edges: { smooth: { type: 'continuous' }, selectionWidth: 2 },
+    nodes: { borderWidth: 2 },
+    interaction: { hover: true, tooltipDelay: 150, hideEdgesOnDrag: true },
+  });
+
+  network.once('stabilizationIterationsDone', () => {
+    network.setOptions({ physics: { enabled: false } });
+  });
+
+  // Stats na navbar
+  document.getElementById('net-stats').textContent =
+    `${data.nos.length} nós · ${data.arestas.length} arestas`;
+}
+
+/* ================================================================
+   BUSCA
+   ============================================================== */
+document.getElementById('btn-buscar').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-buscar');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Buscando…';
+
+  const payload = {
+    no_id:       document.getElementById('sel-no').value,
+    recurso_id:  document.getElementById('sel-recurso').value,
+    ttl:         parseInt(document.getElementById('inp-ttl').value),
+    algo:        document.getElementById('sel-algo').value,
+    modo:        document.getElementById('sel-modo').value,
+    num_caminhos: parseInt(document.getElementById('inp-caminhos').value),
+    validar:     document.getElementById('chk-validar').checked,
+  };
+
+  try {
+    const resp = await fetch('/api/buscar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const result = await resp.json();
+
+    if (result.erro) {
+      alert('Erro: ' + result.erro);
+      return;
+    }
+
+    lastResult = { ...result, originId: payload.no_id };
+    showResults(result, payload.no_id, payload.algo, payload.modo);
+
+    if (document.getElementById('chk-animar').checked) {
+      await animateTrace(result.caminho, result.no_encontrado, payload.no_id);
+    } else {
+      applyFinalColors(result.caminho, result.no_encontrado, payload.no_id);
+    }
+
+    document.getElementById('btn-replay').classList.remove('d-none');
+  } catch (e) {
+    alert('Erro de comunicação: ' + e);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-play-circle-fill me-1"></i> Buscar';
+  }
+});
+
+/* ================================================================
+   REPLAY
+   ============================================================== */
+document.getElementById('btn-replay').addEventListener('click', async () => {
+  if (!lastResult) return;
+  resetHighlights();
+  if (document.getElementById('chk-animar').checked) {
+    await animateTrace(lastResult.caminho, lastResult.no_encontrado, lastResult.originId);
+  } else {
+    applyFinalColors(lastResult.caminho, lastResult.no_encontrado, lastResult.originId);
+  }
+});
+
+/* ================================================================
+   MOSTRAR RESULTADOS
+   ============================================================== */
+function showResults(r, originId, algo, modo) {
+  // Status box
+  const statusBox = document.getElementById('status-box');
+  if (r.encontrado) {
+    statusBox.className = 'p-2 mb-3 text-center fw-bold fs-6 status-found';
+    statusBox.innerHTML = `<i class="bi bi-check-circle-fill me-1"></i> ENCONTRADO em <kbd>${r.no_encontrado}</kbd>`;
+  } else {
+    statusBox.className = 'p-2 mb-3 text-center fw-bold fs-6 status-notfound';
+    statusBox.innerHTML = '<i class="bi bi-x-circle-fill me-1"></i> NÃO ENCONTRADO (TTL esgotado)';
+  }
+
+  // Stats
+  const stats = document.getElementById('stats-row');
+  stats.innerHTML = `
+    <div class="stat-chip"><i class="bi bi-envelope" style="color:#60a5fa;"></i> Mensagens <span class="val">${r.mensagens}</span></div>
+    <div class="stat-chip"><i class="bi bi-diagram-3" style="color:#a78bfa;"></i> Nós visitados <span class="val">${r.nos_envolvidos.length}</span></div>
+    <div class="stat-chip"><i class="bi bi-cpu" style="color:#34d399;"></i> ${algo} <span class="val text-secondary" style="font-size:.75rem;">${modo}</span></div>
+  `;
+
+  // Path chips
+  const pathSection = document.getElementById('path-section');
+  const pathWrap = document.getElementById('path-wrap');
+  if (r.caminho && r.caminho.length > 0) {
+    pathSection.classList.remove('d-none');
+    pathWrap.innerHTML = '';
+    r.caminho.forEach((n, i) => {
+      if (i > 0) {
+        const arr = document.createElement('span');
+        arr.className = 'path-arr';
+        arr.textContent = '›';
+        pathWrap.appendChild(arr);
+      }
+      const chip = document.createElement('span');
+      chip.className = 'path-chip' +
+        (n === originId ? ' origin' : '') +
+        (n === r.no_encontrado ? ' found' : '');
+      chip.textContent = n;
+      pathWrap.appendChild(chip);
+    });
+  } else {
+    pathSection.classList.add('d-none');
+  }
+
+  document.getElementById('result-card').classList.remove('d-none');
+
+  // Trace messages
+  if (r.mensagens_log && r.mensagens_log.length > 0) {
+    const list = document.getElementById('trace-list');
+    list.innerHTML = '';
+    r.mensagens_log.forEach(([de, para, conteudo], i) => {
+      const msgType = conteudo.startsWith('FOUND') ? 'found'
+                    : conteudo.startsWith('CACHE') ? 'cache'
+                    : 'query';
+      const row = document.createElement('div');
+      row.className = 'trace-row';
+      row.innerHTML = `
+        <span class="trace-idx">[${i + 1}]</span>
+        <span class="trace-from">${de}</span>
+        <span class="trace-arr">▶</span>
+        <span class="trace-to">${para}</span>
+        <span class="trace-msg ${msgType}">${conteudo}</span>
+      `;
+      list.appendChild(row);
+    });
+    document.getElementById('trace-count').textContent = r.mensagens_log.length;
+    document.getElementById('trace-card').classList.remove('d-none');
+  } else {
+    document.getElementById('trace-card').classList.add('d-none');
+  }
+
+  // Validação
+  if (r.validacao) {
+    const val = r.validacao;
+    const body = document.getElementById('val-body');
+    let html = '';
+    for (const [vizId, resp] of Object.entries(val.respostas)) {
+      const isConf = resp.startsWith('CONFIRMA');
+      html += `<div class="val-row">
+        <span><i class="bi bi-hdd-network me-1" style="color:#60a5fa;"></i>${vizId}</span>
+        <span class="${isConf ? 'badge-confirma' : 'badge-refuta'}">${resp}</span>
+      </div>`;
+    }
+    const verdict = val.valido
+      ? `<div class="mt-2 text-center" style="color:#34d399;font-size:.82rem;font-weight:600;"><i class="bi bi-shield-check me-1"></i>${val.confirmacoes} confirmações — VÁLIDO</div>`
+      : `<div class="mt-2 text-center" style="color:#f87171;font-size:.82rem;font-weight:600;"><i class="bi bi-shield-x me-1"></i>${val.refutacoes} refutações — INVÁLIDO</div>`;
+    body.innerHTML = html + verdict;
+    document.getElementById('val-card').classList.remove('d-none');
+  } else {
+    document.getElementById('val-card').classList.add('d-none');
+  }
+}
+
+/* ================================================================
+   ANIMAÇÃO
+   ============================================================== */
+async function animateTrace(caminho, noEncontrado, originId) {
+  resetHighlights();
+  const badge = document.getElementById('anim-badge');
+  badge.classList.remove('d-none');
+
+  // Cor do nó de origem
+  setNodeColor(originId, COLORS.origin);
+
+  const vistos = new Set([originId]);
+  for (const noId of caminho) {
+    if (noId === originId) continue;
+    await sleep(animSpeed);
+    setNodeColor(noId, COLORS.visited);
+    vistos.add(noId);
+    network.selectNodes([noId]);
+  }
+
+  if (noEncontrado) {
+    await sleep(animSpeed / 2);
+    setNodeColor(noEncontrado, COLORS.found);
+    network.selectNodes([noEncontrado]);
+    network.focus(noEncontrado, { scale: 1.2, animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
+  }
+
+  network.unselectAll();
+  badge.classList.add('d-none');
+}
+
+function applyFinalColors(caminho, noEncontrado, originId) {
+  resetHighlights();
+  setNodeColor(originId, COLORS.origin);
+  const visited = new Set(caminho);
+  visited.forEach(id => {
+    if (id !== originId && id !== noEncontrado) setNodeColor(id, COLORS.visited);
+  });
+  if (noEncontrado) setNodeColor(noEncontrado, COLORS.found);
+}
+
+/* ================================================================
+   CONSULTAR RECURSO NO GRAFO
+   ============================================================== */
+document.getElementById('sel-consultar').addEventListener('change', async (e) => {
+  const recurso = e.target.value;
+  resetHighlights();
+  if (!recurso) return;
+
+  const resp = await fetch(`/api/consultar/${encodeURIComponent(recurso)}`);
+  const data = await resp.json();
+
+  data.nos.forEach(id => setNodeColor(id, COLORS.queried));
+
+  if (data.nos.length === 1) {
+    network.focus(data.nos[0], { scale: 1.3, animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+  } else if (data.nos.length > 1) {
+    network.fit({ nodes: data.nos, animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+  }
+});
+
+/* ================================================================
+   LIMPAR DESTAQUES
+   ============================================================== */
+document.getElementById('btn-reset').addEventListener('click', () => {
+  resetHighlights();
+  lastResult = null;
+  document.getElementById('sel-consultar').value = '';
+  document.getElementById('btn-replay').classList.add('d-none');
+  document.getElementById('result-card').classList.add('d-none');
+  document.getElementById('trace-card').classList.add('d-none');
+  document.getElementById('val-card').classList.add('d-none');
+});
+
+/* ================================================================
+   CONTROLES DO FORMULÁRIO
+   ============================================================== */
+document.getElementById('inp-ttl').addEventListener('input', e => {
+  document.getElementById('ttl-val').textContent = e.target.value;
+});
+
+document.getElementById('inp-caminhos').addEventListener('input', e => {
+  document.getElementById('nc-val').textContent = e.target.value;
+});
+
+document.getElementById('inp-speed').addEventListener('input', e => {
+  animSpeed = parseInt(e.target.value);
+  document.getElementById('speed-label').textContent = animSpeed + ' ms';
+});
+
+document.getElementById('sel-modo').addEventListener('change', e => {
+  const v = e.target.value;
+  const row = document.getElementById('row-caminhos');
+  row.style.display = (v === 'paralelo' || v === 'ambos') ? '' : 'none';
+});
+
+/* ================================================================
+   UTILITÁRIOS
+   ============================================================== */
+function setNodeColor(id, c) {
+  if (!nodesDs || !nodesDs.get(id)) return;
+  nodesDs.update({ id, color: { background: c.bg, border: c.border, highlight: { background: c.bg, border: c.border } } });
+}
+
+function resetHighlights() {
+  if (!nodesDs) return;
+  nodesDs.forEach(n => setNodeColor(n.id, COLORS.default));
+  if (network) network.unselectAll();
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+/* ================================================================
+   BOOT
+   ============================================================== */
+initGraph();
+</script>
+</body>
+</html>
