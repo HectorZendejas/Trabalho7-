@@ -1,32 +1,63 @@
 # Simulador de Busca em Redes P2P
 
-Simulador de linha de comando de uma rede P2P não estruturada com quatro algoritmos de busca diferentes.
+Simulador de uma rede P2P não estruturada com seis algoritmos de busca, interface de linha de comando e interface web interativa com visualização do grafo.
 
 ## Estrutura do Projeto
 
 ```
 p2p_search/
-├── main.py        # Ponto de entrada CLI e loop interativo
-├── network.py     # Grafo, carregamento do YAML e validações
-├── search.py      # Implementação dos 4 algoritmos de busca
-├── node.py        # Classe Node (id, recursos, vizinhos, cache)
-└── config.yaml    # Configuração de exemplo com 12 nós
+├── main.py            # CLI interativo com wizard de configuração
+├── app.py             # Servidor web (Flask) com interface HTML
+├── network.py         # Grafo, carregamento do YAML e validações
+├── search.py          # Algoritmos de busca, rastro e validação
+├── node.py            # Classe Node (id, recursos, vizinhos, cache)
+├── config.yaml        # Configuração de exemplo
+└── templates/
+    └── index.html     # Interface web (vis.js + Bootstrap)
 ```
 
 ## Requisitos
 
 ```bash
 pip install pyyaml
-# Opcional, para visualização gráfica:
+
+# Para a interface web:
+pip install flask
+
+# Opcional, para visualização gráfica no CLI:
 pip install matplotlib networkx
 ```
 
-## Como Usar
+## Interface Web (recomendada)
 
 ```bash
-cd p2p_search
-python main.py --config config.yaml
+python app.py --config config.yaml
 ```
+
+Abra `http://localhost:5000` no navegador. A interface inclui:
+
+- **Grafo interativo** (vis.js) com zoom, arrastar nós e tooltip com recursos
+- **Formulário de busca** com dropdowns para nó, recurso, algoritmo, modo e TTL
+- **Animação do rastro** — nós acendem em sequência durante a busca (velocidade ajustável)
+- **Destacar recurso no grafo** — filtra e pinta os nós que têm um recurso específico
+- **Painel de resultado** com estatísticas, caminho percorrido e lista de mensagens
+- **Validação com vizinhos** — exibe confirmações e refutações por nó vizinho
+- **Botão Replay** — re-anima a última busca sem nova requisição
+
+Flag disponível:
+
+| Flag | Descrição |
+|---|---|
+| `--config` | Caminho para o arquivo YAML (obrigatório) |
+| `--porta` | Porta HTTP (padrão: 5000) |
+
+## Interface de Linha de Comando
+
+```bash
+python main.py --config config.yaml [--verbose] [--grafico] [--sem-wizard]
+```
+
+Ao iniciar, o programa pergunta se você deseja configurar valores padrão (recurso, nó, algoritmo, TTL, modo). Esses padrões são usados automaticamente quando você omite parâmetros no comando `buscar`.
 
 Flags disponíveis:
 
@@ -35,22 +66,35 @@ Flags disponíveis:
 | `--config` | Caminho para o arquivo YAML (obrigatório) |
 | `--verbose` | Ativa log passo a passo em todas as buscas |
 | `--grafico` | Exibe o grafo com matplotlib ao iniciar |
+| `--sem-wizard` | Pula o wizard de configuração inicial |
 
 ### Comandos Interativos
 
 ```
 > buscar --no <id> --recurso <id> --ttl <n> --algo <algoritmo>
-> rede        # exibe topologia ASCII e recursos de cada nó
-> grafico     # exibe grafo com matplotlib
+         [--modo normal|backtracking|paralelo|ambos]
+         [--num-caminhos <n>]
+         [--validar]
+         [--rastro]
+         [--exportar-rastro <arquivo>]
+         [--verbose]
+
+> consultar --recurso <id>   # mostra quais nós têm o recurso no grafo
+> rede                       # topologia ASCII e recursos por nó
+> grafico                    # visualização com matplotlib
+> ajuda
 > sair
 ```
 
 ### Exemplos
 
 ```
-> buscar --no n1 --recurso r9 --ttl 5 --algo flooding
-> buscar --no n3 --recurso r2 --ttl 4 --algo informed_random_walk
-> buscar --no n2 --recurso r12 --ttl 8 --algo random_walk --verbose
+> buscar --no n1 --recurso r5 --ttl 5 --algo flooding
+> buscar --no n3 --recurso r2 --ttl 4 --algo random_walk --modo backtracking
+> buscar --no n1 --recurso r5 --ttl 6 --algo flooding --modo paralelo --num-caminhos 3
+> buscar --no n1 --recurso r5 --ttl 5 --algo flooding --validar --rastro
+> buscar --no n1 --recurso r5 --ttl 5 --algo flooding --exportar-rastro saida.txt
+> consultar --recurso r5
 ```
 
 ## Arquivo de Configuração (YAML)
@@ -84,23 +128,42 @@ Executadas automaticamente ao carregar a rede. O programa encerra com erro se al
 
 ## Algoritmos de Busca
 
-Todos os algoritmos recebem `--no`, `--recurso`, `--ttl` e `--algo`. A saída sempre inclui total de mensagens trocadas, nós envolvidos e se o recurso foi encontrado.
+Todos os algoritmos retornam total de mensagens, nós envolvidos, sequência de nós visitados e log de mensagens trocadas.
 
 ### `flooding`
 
-Envia a consulta para **todos os vizinhos** recursivamente até TTL=0. Não para ao encontrar o recurso: explora todos os caminhos possíveis e registra o primeiro nó encontrado. Garante cobertura máxima ao custo de alto volume de mensagens.
+Envia a consulta para **todos os vizinhos** recursivamente até TTL=0. Garante cobertura máxima ao custo de alto volume de mensagens.
 
 ### `informed_flooding`
 
-Igual ao flooding, mas cada nó consulta seu **cache local** antes de propagar. Se o recurso estiver em cache, responde imediatamente sem continuar. Ao encontrar o recurso, atualiza o cache de todos os nós no caminho de volta.
+Igual ao flooding, mas cada nó consulta seu **cache local** antes de propagar. Se o recurso estiver em cache, responde imediatamente. Atualiza o cache dos nós no caminho ao encontrar o recurso.
 
 ### `random_walk`
 
-Encaminha para **um único vizinho aleatório** por salto. Baixo custo em mensagens, mas sem garantia de encontrar o recurso dentro do TTL.
+Encaminha para **um único vizinho aleatório** por salto. Baixo custo em mensagens, sem garantia de encontrar o recurso dentro do TTL.
 
 ### `informed_random_walk`
 
-Random walk com consulta de cache. Ao encontrar o recurso (ou acertar o cache), atualiza o cache de todos os nós percorridos no caminho — buscas futuras pelo mesmo recurso convergem mais rápido.
+Random walk com consulta de cache. Ao encontrar o recurso, atualiza o cache de todos os nós percorridos — buscas futuras pelo mesmo recurso convergem mais rápido.
+
+### `backtracking_walk`
+
+Busca em profundidade (DFS) com **backtracking**: quando um caminho falha (TTL esgotado ou sem vizinhos inéditos no caminho atual), retorna ao nó anterior e tenta outro vizinho. Evita revisitar nós no caminho corrente para não criar ciclos.
+
+### `parallel_walk`
+
+Múltiplos **caminhantes aleatórios simultâneos** a partir do nó de origem, simulados em round-robin. O primeiro a encontrar o recurso encerra a busca. O número de caminhos é configurável com `--num-caminhos`.
+
+### Modos de Busca (`--modo`)
+
+Os modos podem ser aplicados independentemente do algoritmo escolhido em `--algo`:
+
+| Modo | Comportamento |
+|---|---|
+| `normal` | Usa o algoritmo selecionado sem modificações (padrão) |
+| `backtracking` | Substitui por DFS com backtracking |
+| `paralelo` | Substitui por N caminhantes simultâneos |
+| `ambos` | N caminhos paralelos, cada um com DFS backtracking |
 
 ### Comparativo
 
@@ -110,25 +173,39 @@ Random walk com consulta de cache. Ao encontrar o recurso (ou acertar o cache), 
 | `informed_flooding` | Média/Baixa | Sim (1ª vez); imediato após | Sim |
 | `random_walk` | Baixa | Não | Não |
 | `informed_random_walk` | Baixa | Não (1ª vez); imediato após | Sim |
+| `backtracking_walk` | Média | Maior que random walk | Não |
+| `parallel_walk` | Média | Maior que random walk | Não |
 
-## Saída de Exemplo
+## Rastro da Busca
 
-```
-Buscando 'r9' a partir de 'n1' (TTL=5, algoritmo=flooding)...
+Todo resultado inclui:
 
-=== RESULTADO ===
-  Algoritmo      : flooding
-  Mensagens      : 12
-  Nós envolvidos : 12 ['n1', 'n10', 'n11', 'n12', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8', 'n9']
-  Recurso        : ENCONTRADO em 'n4'
-```
+- `caminho` — sequência ordenada de nós visitados
+- `mensagens_log` — cada mensagem trocada entre nós: `(de, para, conteúdo)`
 
-Com `--verbose` (ou `--algo ... --verbose` no prompt), cada salto é exibido:
+Use `--rastro` para exibir o rastro formatado no terminal ou `--exportar-rastro <arquivo>` para salvar em texto.
 
 ```
---- Log passo a passo ---
-  [flooding] n1 recebeu busca por 'r9' (TTL=5)
-  [flooding] n2 recebeu busca por 'r9' (TTL=4)
+=== RASTRO DA BUSCA ===
+Recurso: r5  |  Algoritmo: flooding
+Sequência de nós (8): n1 -> n2 -> n3 -> n4 -> n5 -> n6 -> n7 -> n8
+
+Mensagens trocadas (7):
+  [  1] n1      -> n2       QUERY r5 TTL=4
+  [  2] n2      -> n3       QUERY r5 TTL=3
   ...
-  -> ENCONTRADO em n4!
+  [  7] n8      -> n7       FOUND r5
+=======================
 ```
+
+## Validação com Vizinhos (`--validar`)
+
+Após encontrar o recurso, consulta cada vizinho do nó encontrado. Cada vizinho responde com base no seu cache e conhecimento local:
+
+- `CONFIRMA (cache)` — vizinho tem entrada de cache apontando para o nó
+- `CONFIRMA (ping)` — vizinho não tem cache mas o nó realmente possui o recurso
+- `REFUTA` — recurso ausente no nó indicado (cache obsoleto)
+
+## Consulta de Recursos no Grafo
+
+O comando `consultar --recurso <id>` (CLI) e o dropdown "Destacar recurso" (web) mostram exatamente quais nós têm o recurso antes de iniciar uma busca, sem gastar TTL.
