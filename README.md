@@ -1,5 +1,12 @@
 # Simulador de Busca em Redes P2P
 
+## Grupo G
+
+**Aluno 1:** Joey Alan (Matrícula: 2320416)
+**Aluno 2:** Hector (Matrícula: 2315024)
+
+---
+
 Simulador de uma rede P2P não estruturada com seis algoritmos de busca, interface de linha de comando e interface web interativa com visualização do grafo.
 
 ## Estrutura do Projeto
